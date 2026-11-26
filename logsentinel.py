@@ -57,56 +57,94 @@ _RE_WEB = re.compile(
 )
 
 
-def parse_ssh_line(linha, year=ANO_PADRAO):
-    """Lê uma linha de log SSH (syslog).
-
-    Retorna dict {"tipo": "ssh_falha" | "ssh_sucesso", "ip", "usuario",
-    "horario": datetime} ou None se a linha não for de login SSH.
-    """
-    m = _RE_SSH.match(linha.strip())
-    if m is None or m["mes"] not in MESES:
+def _montar_horario(ano, m):
+    """datetime a partir dos campos da linha, ou None se a data não existir."""
+    if m["mes"] not in MESES:
         return None
     try:
-        horario = datetime(
-            year, MESES[m["mes"]], int(m["dia"]),
+        return datetime(
+            int(ano), MESES[m["mes"]], int(m["dia"]),
             int(m["h"]), int(m["m"]), int(m["s"]),
         )
-    except ValueError:  # data impossível, como 30/02 
+    except ValueError:  # data impossível, como 30/02
         return None
-    tipo = "ssh_falha" if m["resultado"] == "Failed" else "ssh_sucesso"
-    return {
-        "tipo": tipo,
-        "ip": m["ip"],
-        "usuario": m["usuario"],
-        "horario": horario
-    }
+
+
+class ParserSSH:
+    """Lê linhas de login do sshd (syslog).
+
+    O syslog não traz o ano, então ele é informado ao criar o parser.
+    """
+
+    def __init__(self, ano=ANO_PADRAO):
+        self.ano = ano
+
+    def interpretar(self, linha):
+        """Retorna dict {"tipo": "ssh_falha" | "ssh_sucesso", "ip", "usuario",
+        "horario": datetime} ou None se a linha não for de login SSH.
+        """
+        m = _RE_SSH.match(linha.strip())
+        if m is None:
+            return None
+        horario = _montar_horario(self.ano, m)
+        if horario is None:
+            return None
+        tipo = "ssh_falha" if m["resultado"] == "Failed" else "ssh_sucesso"
+        return {
+            "tipo": tipo,
+            "ip": m["ip"],
+            "usuario": m["usuario"],
+            "horario": horario,
+        }
+
+
+class ParserWeb:
+    """Lê linhas de acesso web (Common ou Combined, Apache/Nginx).
+
+    O fuso horário do log é ignorado: o horário é o que está escrito na linha.
+    """
+
+    def interpretar(self, linha):
+        """Retorna dict {"tipo": "web", "ip", "horario", "metodo", "caminho",
+        "status": int} ou None se a linha não estiver no formato.
+        """
+        m = _RE_WEB.match(linha.strip())
+        if m is None:
+            return None
+        horario = _montar_horario(m["ano"], m)
+        if horario is None:
+            return None
+        return {
+            "tipo": "web",
+            "ip": m["ip"],
+            "horario": horario,
+            "metodo": m["metodo"],
+            "caminho": m["caminho"],
+            "status": int(m["status"]),
+        }
+
+
+def _interpretar(linha, parsers):
+    """Passa a linha pelos parsers, em ordem, até um deles reconhecer.
+
+    Retorna o evento do primeiro parser que reconheceu ou None se nenhum
+    reconheceu. Um formato novo de log entra só como mais um item da lista.
+    """
+    for parser in parsers:
+        evento = parser.interpretar(linha)
+        if evento is not None:
+            return evento
+    return None
+
+
+def parse_ssh_line(linha, year=ANO_PADRAO):
+    """Lê uma linha de log SSH (syslog). Ver ParserSSH.interpretar."""
+    return ParserSSH(year).interpretar(linha)
 
 
 def parse_web_line(linha):
-    """Lê uma linha de acesso web (Common ou Combined, Apache/Nginx).
-
-    Retorna dict {"tipo": "web", "ip", "horario", "metodo", "caminho",
-    "status": int} ou None se a linha não estiver no formato.
-    O fuso horário do log é ignorado: o horário é o que está escrito na linha.
-    """
-    m = _RE_WEB.match(linha.strip())
-    if m is None or m["mes"] not in MESES:
-        return None
-    try:
-        horario = datetime(
-            int(m["ano"]), MESES[m["mes"]], int(m["dia"]),
-            int(m["h"]), int(m["m"]), int(m["s"]),
-        )
-    except ValueError:
-        return None
-    return {
-        "tipo": "web",
-        "ip": m["ip"],
-        "horario": horario,
-        "metodo": m["metodo"],
-        "caminho": m["caminho"],
-        "status": int(m["status"]),
-    }
+    """Lê uma linha de acesso web. Ver ParserWeb.interpretar."""
+    return ParserWeb().interpretar(linha)
 
 
 # ---------------------------------------------------------------------------
@@ -257,13 +295,14 @@ def analyze_lines(linhas, config=None, year=ANO_PADRAO):
     if config:
         cfg.update(config)
 
+    parsers = [ParserSSH(year), ParserWeb()]
     eventos = []
     ignoradas = 0
     for linha in linhas:
         linha = linha.strip()
         if not linha:
             continue
-        evento = parse_ssh_line(linha, year) or parse_web_line(linha)
+        evento = _interpretar(linha, parsers)
         if evento is None:
             ignoradas += 1
         else:
