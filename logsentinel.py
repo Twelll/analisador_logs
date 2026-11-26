@@ -149,66 +149,92 @@ def calcular_nivel(ocorrencias, limite):
     return max(1, min(10, nivel))
 
 
-def detect_ssh_bruteforce(eventos, config):
-    """Gera um alerta por IP com falhas SSH >= limite dentro da janela.
+class DetectorPorJanela:
+    """Base dos detectores que contam eventos por IP numa janela de tempo.
 
-    O alerta descreve a janela mais cheia daquele IP.
+    detectar() segue sempre o mesmo roteiro: filtra os eventos, agrupa por IP,
+    acha a janela mais cheia de cada IP e gera um alerta se ela atinge o limite.
+    Cada subclasse define o filtro, o texto da evidência, a fonte, o motivo e
+    as chaves do config de onde vêm o limite e a janela.
     """
-    limite = config["ssh_falhas_limite"]
-    janela = config["ssh_janela_segundos"]
-    falhas = [e for e in eventos if e["tipo"] == "ssh_falha"]
 
-    alertas = []
-    for ip, lista in _agrupar_por_ip(falhas).items():
-        i, j = _janela_mais_cheia(lista, janela)
-        na_janela = lista[i:j + 1]
-        if len(na_janela) < limite:
-            continue
-        alertas.append({
+    fonte = None
+    motivo = None
+    chave_limite = None
+    chave_janela = None
+
+    def __init__(self, config):
+        self.limite = config[self.chave_limite]
+        self.janela = config[self.chave_janela]
+
+    def detectar(self, eventos):
+        """Um alerta por IP; o alerta descreve a janela mais cheia daquele IP."""
+        alertas = []
+        for ip, lista in _agrupar_por_ip(self._filtrar(eventos)).items():
+            i, j = _janela_mais_cheia(lista, self.janela)
+            na_janela = lista[i:j + 1]
+            if len(na_janela) < self.limite:
+                continue
+            alertas.append(self._montar_alerta(ip, na_janela))
+        return alertas
+
+    def _montar_alerta(self, ip, na_janela):
+        return {
             "ip": ip,
-            "fonte": "ssh",
+            "fonte": self.fonte,
             "inicio": na_janela[0]["horario"],
             "fim": na_janela[-1]["horario"],
             "ocorrencias": len(na_janela),
-            "motivo": "Falhas repetidas de autenticação SSH",
-            "nivel": calcular_nivel(len(na_janela), limite),
-            "evidencias": [
-                f"{e['horario']:%d/%m %H:%M:%S} senha incorreta (usuário: {e['usuario']})"
-                for e in na_janela
-            ],
-        })
-    return alertas
+            "motivo": self.motivo,
+            "nivel": calcular_nivel(len(na_janela), self.limite),
+            "evidencias": [self._evidencia(e) for e in na_janela],
+        }
+
+    def _filtrar(self, eventos):
+        raise NotImplementedError
+
+    def _evidencia(self, evento):
+        raise NotImplementedError
+
+
+class DetectorForcaBrutaSSH(DetectorPorJanela):
+    """Falhas de senha SSH repetidas (força bruta)."""
+
+    fonte = "ssh"
+    motivo = "Falhas repetidas de autenticação SSH"
+    chave_limite = "ssh_falhas_limite"
+    chave_janela = "ssh_janela_segundos"
+
+    def _filtrar(self, eventos):
+        return [e for e in eventos if e["tipo"] == "ssh_falha"]
+
+    def _evidencia(self, e):
+        return f"{e['horario']:%d/%m %H:%M:%S} senha incorreta (usuário: {e['usuario']})"
+
+
+class Detector404Web(DetectorPorJanela):
+    """Muitas respostas 404 (varredura de páginas)."""
+
+    fonte = "web"
+    motivo = "Excesso de respostas 404 (busca por páginas escondidas)"
+    chave_limite = "web_404_limite"
+    chave_janela = "web_404_janela_segundos"
+
+    def _filtrar(self, eventos):
+        return [e for e in eventos if e["tipo"] == "web" and e["status"] == 404]
+
+    def _evidencia(self, e):
+        return f"{e['horario']:%d/%m %H:%M:%S} {e['metodo']} {e['caminho']} -> 404"
+
+
+def detect_ssh_bruteforce(eventos, config):
+    """Gera um alerta por IP com falhas SSH >= limite dentro da janela."""
+    return DetectorForcaBrutaSSH(config).detectar(eventos)
 
 
 def detect_web_404(eventos, config):
-    """Gera um alerta por IP com respostas 404 >= limite dentro da janela.
-
-    O alerta descreve a janela mais cheia daquele IP.
-    """
-    limite = config["web_404_limite"]
-    janela = config["web_404_janela_segundos"]
-    respostas_404 = [e for e in eventos if e["tipo"] == "web" and e["status"] == 404]
-
-    alertas = []
-    for ip, lista in _agrupar_por_ip(respostas_404).items():
-        i, j = _janela_mais_cheia(lista, janela)
-        na_janela = lista[i:j + 1]
-        if len(na_janela) < limite:
-            continue
-        alertas.append({
-            "ip": ip,
-            "fonte": "web",
-            "inicio": na_janela[0]["horario"],
-            "fim": na_janela[-1]["horario"],
-            "ocorrencias": len(na_janela),
-            "motivo": "Excesso de respostas 404 (busca por páginas escondidas)",
-            "nivel": calcular_nivel(len(na_janela), limite),
-            "evidencias": [
-                f"{e['horario']:%d/%m %H:%M:%S} {e['metodo']} {e['caminho']} -> 404"
-                for e in na_janela
-            ],
-        })
-    return alertas
+    """Gera um alerta por IP com respostas 404 >= limite dentro da janela."""
+    return Detector404Web(config).detectar(eventos)
 
 
 # ---------------------------------------------------------------------------
