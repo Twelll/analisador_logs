@@ -1,11 +1,12 @@
-"""LogSentinel - analisador de logs SSH e web (Sprint 3).
+"""LogSentinel - analisador de logs SSH e web (Sprint 4).
 
 Lê logs de autenticação SSH (syslog) e de acesso web (Common/Combined),
 procura IPs com comportamento suspeito e imprime um relatório no terminal.
 
 Fluxo de dados:
-    arquivo -> linhas -> eventos (parsers) -> alertas (detectores)
-            -> resultado (analyze_lines) -> texto (format_report)
+    arquivo -> linhas -> eventos (ParserSSH, ParserWeb)
+            -> alertas (DetectorForcaBrutaSSH, Detector404Web)
+            -> resultado (Analisador.analisar) -> texto (format_report)
 
 Uso:
     python logsentinel.py --ssh auth.log --web access.log [--ano 2026]
@@ -284,6 +285,51 @@ def _ordenar(alertas):
     return sorted(alertas, key=lambda a: (-a["nivel"], -a["ocorrencias"], a["ip"]))
 
 
+class Analisador:
+    """Ponto único de entrada da análise.
+
+    Junta o config padrão com o informado e monta os parsers e os detectores.
+    Quem usa (main, analyze_lines) só entrega as linhas e recebe o resultado
+    ou o texto do relatório, sem conhecer as partes.
+    """
+
+    def __init__(self, config=None, ano=ANO_PADRAO):
+        self.config = dict(DEFAULT_CONFIG)
+        if config:
+            self.config.update(config)
+        self.parsers = [ParserSSH(ano), ParserWeb()]
+        self.detectores = [
+            DetectorForcaBrutaSSH(self.config),
+            Detector404Web(self.config),
+        ]
+
+    def analisar(self, linhas):
+        """Retorna {"alertas": [...], "linhas_ignoradas": int}, alertas já ordenados.
+
+        Linhas em branco não contam como ignoradas.
+        """
+        eventos = []
+        ignoradas = 0
+        for linha in linhas:
+            linha = linha.strip()
+            if not linha:
+                continue
+            evento = _interpretar(linha, self.parsers)
+            if evento is None:
+                ignoradas += 1
+            else:
+                eventos.append(evento)
+
+        alertas = []
+        for detector in self.detectores:
+            alertas += detector.detectar(eventos)
+        return {"alertas": _ordenar(alertas), "linhas_ignoradas": ignoradas}
+
+    def relatorio(self, linhas):
+        """Analisa as linhas e devolve o texto do relatório."""
+        return format_report(self.analisar(linhas))
+
+
 def analyze_lines(linhas, config=None, year=ANO_PADRAO):
     """Analisa as linhas de um log (SSH, web ou os dois misturados).
 
@@ -291,31 +337,36 @@ def analyze_lines(linhas, config=None, year=ANO_PADRAO):
     com: ip, fonte ("ssh" | "web"), inicio, fim, ocorrencias, motivo, nivel,
     evidencias (lista de str). Linhas em branco não contam como ignoradas.
     """
-    cfg = dict(DEFAULT_CONFIG)
-    if config:
-        cfg.update(config)
-
-    parsers = [ParserSSH(year), ParserWeb()]
-    eventos = []
-    ignoradas = 0
-    for linha in linhas:
-        linha = linha.strip()
-        if not linha:
-            continue
-        evento = _interpretar(linha, parsers)
-        if evento is None:
-            ignoradas += 1
-        else:
-            eventos.append(evento)
-
-    alertas = detect_ssh_bruteforce(eventos, cfg) + detect_web_404(eventos, cfg)
-    return {"alertas": _ordenar(alertas), "linhas_ignoradas": ignoradas}
+    return Analisador(config, year).analisar(linhas)
 
 
 def _formatar_periodo(inicio, fim):
     if inicio.date() == fim.date():
         return f"{inicio:%d/%m}, das {inicio:%H:%M:%S} às {fim:%H:%M:%S}"
     return f"{inicio:%d/%m %H:%M} a {fim:%d/%m %H:%M}"
+
+
+def _formatar_alerta(alerta):
+    """Linhas do relatório para um alerta, começando por uma linha em branco."""
+    fonte = "SSH" if alerta["fonte"] == "ssh" else "Web"
+    texto = [
+        "",
+        f"IP analisado: {alerta['ip']}",
+        f"Fonte: {fonte}",
+        f"Período: {_formatar_periodo(alerta['inicio'], alerta['fim'])}",
+        f"Ocorrências: {alerta['ocorrencias']}",
+        f"Motivo: {alerta['motivo']}",
+        f"Nível de suspeita: {alerta['nivel']}/10",
+    ]
+    evidencias = alerta["evidencias"]
+    if evidencias:
+        texto.append("Evidências:")
+        for e in evidencias[:MAX_EVIDENCIAS_NO_RELATORIO]:
+            texto.append(f"  - {e}")
+        restantes = len(evidencias) - MAX_EVIDENCIAS_NO_RELATORIO
+        if restantes > 0:
+            texto.append(f"  (e mais {restantes})")
+    return texto
 
 
 def format_report(resultado):
@@ -328,22 +379,7 @@ def format_report(resultado):
     else:
         texto.append(f"{len(alertas)} alerta(s), do mais para o menos suspeito.")
         for alerta in alertas:
-            fonte = "SSH" if alerta["fonte"] == "ssh" else "Web"
-            texto.append("")
-            texto.append(f"IP analisado: {alerta['ip']}")
-            texto.append(f"Fonte: {fonte}")
-            texto.append(f"Período: {_formatar_periodo(alerta['inicio'], alerta['fim'])}")
-            texto.append(f"Ocorrências: {alerta['ocorrencias']}")
-            texto.append(f"Motivo: {alerta['motivo']}")
-            texto.append(f"Nível de suspeita: {alerta['nivel']}/10")
-            evidencias = alerta["evidencias"]
-            if evidencias:
-                texto.append("Evidências:")
-                for e in evidencias[:MAX_EVIDENCIAS_NO_RELATORIO]:
-                    texto.append(f"  - {e}")
-                restantes = len(evidencias) - MAX_EVIDENCIAS_NO_RELATORIO
-                if restantes > 0:
-                    texto.append(f"  (e mais {restantes})")
+            texto += _formatar_alerta(alerta)
 
     texto.append("")
     texto.append(f"Linhas ignoradas: {resultado['linhas_ignoradas']}")
@@ -358,6 +394,18 @@ def _ler_linhas(caminho):
     # newline="" mantém o \r\n do fim das linhas; o parser faz strip()
     with open(caminho, encoding="utf-8", errors="replace", newline="") as arquivo:
         return arquivo.readlines()
+
+
+def _ler_arquivos(caminhos):
+    """Lê os arquivos na ordem dada e junta as linhas.
+
+    Erros de leitura (OSError) sobem para quem chamou; erro.filename diz qual
+    arquivo falhou.
+    """
+    linhas = []
+    for caminho in caminhos:
+        linhas += _ler_linhas(caminho)
+    return linhas
 
 
 def main(argv=None):
@@ -384,21 +432,17 @@ def main(argv=None):
     if not args.ssh and not args.web:
         parser.error("informe ao menos um arquivo com --ssh ou --web")
 
-    linhas = []
-    for caminho in (args.ssh, args.web):
-        if caminho is None:
-            continue
-        try:
-            linhas += _ler_linhas(caminho)
-        except FileNotFoundError:
-            print(f"Erro: arquivo não encontrado: {caminho}", file=sys.stderr)
-            return 1
-        except OSError as erro:
-            print(f"Erro ao ler {caminho}: {erro.strerror}", file=sys.stderr)
-            return 1
+    caminhos = [c for c in (args.ssh, args.web) if c is not None]
+    try:
+        linhas = _ler_arquivos(caminhos)
+    except FileNotFoundError as erro:
+        print(f"Erro: arquivo não encontrado: {erro.filename}", file=sys.stderr)
+        return 1
+    except OSError as erro:
+        print(f"Erro ao ler {erro.filename}: {erro.strerror}", file=sys.stderr)
+        return 1
 
-    resultado = analyze_lines(linhas, year=args.ano)
-    print(format_report(resultado))
+    print(Analisador(ano=args.ano).relatorio(linhas))
     return 0
 
 
