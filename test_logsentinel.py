@@ -1,10 +1,11 @@
-"""Testes automatizados do LogSentinel (Sprint 2).
+"""Testes automatizados do LogSentinel.
 
 Cada teste verifica um critério de aceitação de docs/sprint-2-historias.md.
 O ID do critério (ex.: CA01.2) aparece no nome e na docstring do teste.
 
-Nesta sprint os testes devem FALHAR: as funções ainda não foram
-implementadas. Eles servem como especificação para a Sprint 3.
+Escritos na Sprint 2, antes da implementação, como especificação.
+Desde a Sprint 3 todos passam; na Sprint 4 continuaram passando após
+cada passo da refatoração, sem alteração.
 
 Executar: python -m unittest -v test_logsentinel
 """
