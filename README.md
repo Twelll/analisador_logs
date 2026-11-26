@@ -2,19 +2,20 @@
 
 Ferramenta de terminal em Python para analisar logs ssh e web (apache)
 
-## Etapa atual: Sprint 3
+## Etapa atual: Sprint 4
 
-Esta entrega contém o diagrama da arquitetura e a implementação das quatro histórias de usuário. Os 36 testes automatizados da Sprint 2 passam.
+Esta entrega contém a refatoração do código da Sprint 3 e três padrões de projeto aplicados (Template Method nos detectores, Chain of Responsibility nos parsers e Facade no analisador), cada um com justificativa e diagrama. Os 36 testes automatizados da Sprint 2 continuam passando.
 
 - [Proposta e pesquisa da Sprint 1](docs/sprint-1-proposta.md)
 - [Histórias, critérios e relação com os testes da Sprint 2](docs/sprint-2-historias.md)
-- [Arquitetura e desenvolvimento da Sprint 3](docs/sprint-3-arquitetura.md)
+- [Arquitetura e desenvolvimento da Sprint 3](docs/sprint-3-desenvolviment.md)
+- [Refatoração e padrões de projeto da Sprint 4](docs/sprint-4-padroes.md)
 
 ## Estrutura
 
 ```text
 main.py                      # inicializador auxiliar
-logsentinel.py               # código-fonte: parsers, detectores, relatório e linha de comando
+logsentinel.py               # código-fonte: parsers, detectores, analisador, relatório e linha de comando
 test_logsentinel.py          # testes das quatro histórias
 data/
   OpenSSH_2k.log             # referência dos sete testes de integração SSH
@@ -22,10 +23,9 @@ data/
 docs/
   sprint-1-proposta.md
   sprint-2-historias.md
-  sprint-3-arquitetura.md
+  sprint-3-desenvolviment.md
+  sprint-4-padroes.md        # refatoração, padrões de projeto e diagramas
   arquitetura.png            # diagrama da arquitetura
-  arquitetura.svg
-  arquitetura.dot            # código-fonte do diagrama (Graphviz)
 ```
 
 ## Executar os testes
@@ -57,7 +57,7 @@ O log SSH é `data/OpenSSH_2k.log`. As contagens e os resultados esperados de am
 
 ## Próximas etapas
 
-A Sprint 4 trata da refatoração e dos padrões de projeto. O empacotamento final deve seguir o enunciado: documentação em PDF e ZIP com código-fonte e testes em dois arquivos `.py`.
+Falta a entrega final: documentação em PDF e ZIP com código-fonte e testes em dois arquivos `.py` (`logsentinel.py` e `test_logsentinel.py`).
 
 ## 📄 Licença
 Você pode usar, modificar e distribuir este projeto. [MIT License](./LICENSE)
